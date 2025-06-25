@@ -75,11 +75,21 @@ The URLs to monitor are stored in a JSON file in the S3 config bucket. The defau
 
 To update the list of URLs:
 
-1. Edit the `sample-urls.json` file
-2. Upload it to S3:
+1. Create or edit a local `urls.json` file with your URLs
+2. Run the deployment script again:
    ```
-   aws s3 cp sample-urls.json s3://ping-config/urls.json
+   ./deploy.sh
    ```
+   The script will automatically upload your local `urls.json` file to S3.
+
+Alternatively, you can manually upload it to S3:
+   ```
+   aws s3 cp urls.json s3://ping-config/urls.json
+   ```
+
+If no local `urls.json` file exists, the deployment script will:
+1. Use the existing configuration in S3 if it exists
+2. Upload the `sample-urls.json` file if no configuration exists in S3
 
 ### Lambda Environment Variables
 

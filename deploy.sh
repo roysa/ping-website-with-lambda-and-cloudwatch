@@ -21,12 +21,29 @@ echo "Starting deployment..."
 
 # Create S3 buckets if they don't exist
 echo "Creating S3 buckets..."
-aws s3api create-bucket --bucket $CONFIG_BUCKET --region $REGION || true
-aws s3api create-bucket --bucket $FLAGS_BUCKET --region $REGION || true
+if [ "$REGION" = "us-east-1" ]; then
+    aws s3api create-bucket --bucket $CONFIG_BUCKET --region $REGION || true
+    aws s3api create-bucket --bucket $FLAGS_BUCKET --region $REGION || true
+else
+    aws s3api create-bucket --bucket $CONFIG_BUCKET --region $REGION --create-bucket-configuration LocationConstraint=$REGION || true
+    aws s3api create-bucket --bucket $FLAGS_BUCKET --region $REGION --create-bucket-configuration LocationConstraint=$REGION || true
+fi
 
-# Upload sample config to S3
-echo "Uploading sample configuration to S3..."
-aws s3 cp sample-urls.json s3://$CONFIG_BUCKET/urls.json
+# Upload config to S3
+echo "Checking for local urls.json file..."
+if [ -f urls.json ]; then
+    echo "Local urls.json found, uploading to S3..."
+    aws s3 cp urls.json s3://$CONFIG_BUCKET/urls.json
+    echo "Configuration uploaded to S3."
+else
+    echo "Local urls.json not found, checking if configuration file already exists in S3..."
+    if ! aws s3api head-object --bucket $CONFIG_BUCKET --key urls.json 2>/dev/null; then
+        echo "Uploading sample configuration to S3..."
+        aws s3 cp sample-urls.json s3://$CONFIG_BUCKET/urls.json
+    else
+        echo "Configuration file already exists in S3, skipping upload..."
+    fi
+fi
 
 # Create SNS topic
 echo "Creating SNS topic..."
@@ -34,21 +51,32 @@ SNS_TOPIC_ARN=$(aws sns create-topic --name $SNS_TOPIC_NAME --region $REGION --o
 echo "SNS Topic ARN: $SNS_TOPIC_ARN"
 
 # Subscribe email to SNS topic
-echo "Subscribing email to SNS topic..."
-aws sns subscribe \
-    --topic-arn $SNS_TOPIC_ARN \
-    --protocol email \
-    --notification-endpoint $EMAIL_FOR_NOTIFICATIONS \
-    --region $REGION
-
-echo "Please confirm the subscription by clicking the link in the email sent to $EMAIL_FOR_NOTIFICATIONS"
+echo "Checking if email is already subscribed to SNS topic..."
+if ! aws sns list-subscriptions-by-topic --topic-arn $SNS_TOPIC_ARN --region $REGION --query "Subscriptions[?Endpoint=='$EMAIL_FOR_NOTIFICATIONS']" --output text | grep -q "$EMAIL_FOR_NOTIFICATIONS"; then
+    echo "Subscribing email to SNS topic..."
+    aws sns subscribe \
+        --topic-arn $SNS_TOPIC_ARN \
+        --protocol email \
+        --notification-endpoint $EMAIL_FOR_NOTIFICATIONS \
+        --region $REGION
+    echo "Please confirm the subscription by clicking the link in the email sent to $EMAIL_FOR_NOTIFICATIONS"
+else
+    echo "Email is already subscribed to SNS topic, skipping subscription..."
+fi
 
 # Create IAM role for Lambda
-echo "Creating IAM role for Lambda..."
+echo "Setting up IAM role for Lambda..."
 ROLE_NAME="lambda-url-ping-role"
 
-# Create trust policy document
-cat > trust-policy.json << EOF
+# Check if role already exists
+echo "Checking if IAM role already exists..."
+if aws iam get-role --role-name $ROLE_NAME 2>/dev/null; then
+    echo "IAM role already exists, skipping creation..."
+    ROLE_ARN=$(aws iam get-role --role-name $ROLE_NAME --query 'Role.Arn' --output text)
+else
+    echo "Creating IAM role..."
+    # Create trust policy document
+    cat > trust-policy.json << EOF
 {
   "Version": "2012-10-17",
   "Statement": [
@@ -63,12 +91,19 @@ cat > trust-policy.json << EOF
 }
 EOF
 
-# Create role
-aws iam create-role --role-name $ROLE_NAME --assume-role-policy-document file://trust-policy.json || true
-ROLE_ARN=$(aws iam get-role --role-name $ROLE_NAME --query 'Role.Arn' --output text)
+    # Create role
+    aws iam create-role --role-name $ROLE_NAME --assume-role-policy-document file://trust-policy.json
+    ROLE_ARN=$(aws iam get-role --role-name $ROLE_NAME --query 'Role.Arn' --output text)
+fi
 
-# Create policy document
-cat > policy.json << EOF
+# Create policy document and attach to role
+POLICY_NAME="lambda-url-ping-policy"
+echo "Checking if IAM policy already exists..."
+POLICY_ARN=$(aws iam list-policies --query "Policies[?PolicyName=='$POLICY_NAME'].Arn" --output text)
+
+if [ -z "$POLICY_ARN" ]; then
+    echo "Creating IAM policy..."
+    cat > policy.json << EOF
 {
   "Version": "2012-10-17",
   "Statement": [
@@ -106,14 +141,18 @@ cat > policy.json << EOF
   ]
 }
 EOF
+    POLICY_ARN=$(aws iam create-policy --policy-name $POLICY_NAME --policy-document file://policy.json --query 'Policy.Arn' --output text)
+    echo "IAM policy created with ARN: $POLICY_ARN"
+else
+    echo "IAM policy already exists with ARN: $POLICY_ARN"
+fi
 
 # Attach policy to role
-POLICY_NAME="lambda-url-ping-policy"
-aws iam create-policy --policy-name $POLICY_NAME --policy-document file://policy.json || true
-POLICY_ARN=$(aws iam list-policies --query "Policies[?PolicyName=='$POLICY_NAME'].Arn" --output text)
+echo "Attaching policy to role..."
 aws iam attach-role-policy --role-name $ROLE_NAME --policy-arn $POLICY_ARN || true
 
 # Also attach the AWS managed policy for Lambda basic execution
+echo "Attaching AWS Lambda basic execution policy..."
 aws iam attach-role-policy --role-name $ROLE_NAME --policy-arn arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole || true
 
 # Wait for role to propagate
@@ -156,13 +195,20 @@ aws events put-rule \
     --region $REGION
 
 # Add permission for CloudWatch Events to invoke Lambda
-aws lambda add-permission \
-    --function-name $LAMBDA_FUNCTION_NAME \
-    --statement-id "AllowCloudWatchEventsInvoke" \
-    --action "lambda:InvokeFunction" \
-    --principal "events.amazonaws.com" \
-    --source-arn $(aws events describe-rule --name $RULE_NAME --region $REGION --query 'Arn' --output text) \
-    --region $REGION || true
+# Check if permission already exists
+echo "Checking if Lambda permission already exists..."
+if ! aws lambda get-policy --function-name $LAMBDA_FUNCTION_NAME --region $REGION 2>/dev/null | grep -q "AllowCloudWatchEventsInvoke"; then
+    echo "Adding permission for CloudWatch Events to invoke Lambda..."
+    aws lambda add-permission \
+        --function-name $LAMBDA_FUNCTION_NAME \
+        --statement-id "AllowCloudWatchEventsInvoke" \
+        --action "lambda:InvokeFunction" \
+        --principal "events.amazonaws.com" \
+        --source-arn $(aws events describe-rule --name $RULE_NAME --region $REGION --query 'Arn' --output text) \
+        --region $REGION
+else
+    echo "Permission already exists, skipping..."
+fi
 
 # Set Lambda as target for CloudWatch Events rule
 aws events put-targets \
