@@ -36,7 +36,11 @@ flags/
    cd ping-website-with-lambda-and-cloudwatch
    ```
 
-2. Edit the `deploy.sh` script to set your configuration:
+2. Copy the `.env.example` file to `.env` and update the configuration values:
+   ```
+   cp .env.example .env
+   ```
+   Then edit the `.env` file to:
    - Set your preferred AWS region (default: us-east-1)
    - Add your email address for notifications
    - Optionally customize bucket names and other settings

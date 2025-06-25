@@ -1,1 +1,4 @@
 .idea
+
+# Environment variables
+.env

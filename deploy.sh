@@ -1,17 +1,19 @@
 #!/bin/bash
 set -e
 
-# Configuration
-CONFIG_BUCKET="ping-config"
-FLAGS_BUCKET="ping-flags"
-LAMBDA_FUNCTION_NAME="url-ping-lambda"
-SNS_TOPIC_NAME="url-ping-notifications"
-REGION="us-east-1"  # Change to your preferred region
-EMAIL_FOR_NOTIFICATIONS=""  # Add your email here
+# Check if .env file exists and source it
+if [ -f .env ]; then
+    echo "Loading configuration from .env file..."
+    source .env
+else
+    echo "Error: .env file not found."
+    echo "Please copy .env.example to .env and update the values."
+    exit 1
+fi
 
 # Check if email is provided
 if [ -z "$EMAIL_FOR_NOTIFICATIONS" ]; then
-    echo "Please edit this script to add your email address for notifications."
+    echo "Please set EMAIL_FOR_NOTIFICATIONS in your .env file."
     exit 1
 fi
 
