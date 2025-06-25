@@ -21,11 +21,19 @@ echo "Starting deployment..."
 
 # Create S3 buckets if they don't exist
 echo "Creating S3 buckets..."
-aws s3api create-bucket --bucket $CONFIG_BUCKET --region $REGION || true
-aws s3api create-bucket --bucket $FLAGS_BUCKET --region $REGION || true
+if [ "$REGION" = "us-east-1" ]; then
+    aws s3api create-bucket --bucket $CONFIG_BUCKET --region $REGION || true
+    aws s3api create-bucket --bucket $FLAGS_BUCKET --region $REGION || true
+else
+    aws s3api create-bucket --bucket $CONFIG_BUCKET --region $REGION --create-bucket-configuration LocationConstraint=$REGION || true
+    aws s3api create-bucket --bucket $FLAGS_BUCKET --region $REGION --create-bucket-configuration LocationConstraint=$REGION || true
+fi
 
 # Upload sample config to S3
 echo "Uploading sample configuration to S3..."
+# Wait a moment for the bucket to be fully created and available
+echo "Waiting for S3 buckets to be fully created..."
+sleep 5
 aws s3 cp sample-urls.json s3://$CONFIG_BUCKET/urls.json
 
 # Create SNS topic
