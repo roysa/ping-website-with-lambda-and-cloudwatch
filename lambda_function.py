@@ -141,11 +141,12 @@ def create_flag(s3_client, bucket, key):
     """
     Create a flag file in S3.
     """
+    import time
     s3_client.put_object(
         Bucket=bucket,
         Key=key,
         Body=json.dumps({
-            'timestamp': int(boto3.client('sts').get_caller_identity()['ResponseMetadata']['HTTPHeaders']['date']),
+            'timestamp': int(time.time()),
             'status': 'down'
         })
     )
