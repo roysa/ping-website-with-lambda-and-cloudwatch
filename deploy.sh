@@ -163,21 +163,26 @@ sleep 10
 echo "Packaging Lambda function..."
 zip -r lambda_function.zip lambda_function.py
 
-# Create Lambda function
-echo "Creating Lambda function..."
-aws lambda create-function \
-    --function-name $LAMBDA_FUNCTION_NAME \
-    --zip-file fileb://lambda_function.zip \
-    --handler lambda_function.lambda_handler \
-    --runtime python3.9 \
-    --role $ROLE_ARN \
-    --timeout 30 \
-    --environment "Variables={CONFIG_BUCKET=$CONFIG_BUCKET,CONFIG_KEY=urls.json,FLAGS_BUCKET=$FLAGS_BUCKET,SNS_TOPIC_ARN=$SNS_TOPIC_ARN}" \
-    --region $REGION || \
-aws lambda update-function-code \
-    --function-name $LAMBDA_FUNCTION_NAME \
-    --zip-file fileb://lambda_function.zip \
-    --region $REGION
+# Check if Lambda function already exists
+echo "Checking if Lambda function already exists..."
+if aws lambda get-function --function-name $LAMBDA_FUNCTION_NAME --region $REGION 2>/dev/null; then
+    echo "Lambda function already exists, updating code..."
+    aws lambda update-function-code \
+        --function-name $LAMBDA_FUNCTION_NAME \
+        --zip-file fileb://lambda_function.zip \
+        --region $REGION
+else
+    echo "Creating new Lambda function..."
+    aws lambda create-function \
+        --function-name $LAMBDA_FUNCTION_NAME \
+        --zip-file fileb://lambda_function.zip \
+        --handler lambda_function.lambda_handler \
+        --runtime python3.9 \
+        --role $ROLE_ARN \
+        --timeout 30 \
+        --environment "Variables={CONFIG_BUCKET=$CONFIG_BUCKET,CONFIG_KEY=urls.json,FLAGS_BUCKET=$FLAGS_BUCKET,SNS_TOPIC_ARN=$SNS_TOPIC_ARN}" \
+        --region $REGION
+fi
 
 # Update Lambda configuration
 aws lambda update-function-configuration \
